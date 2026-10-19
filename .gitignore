@@ -1,0 +1,4 @@
+# Environment configs contain tenant / subscription IDs and email
+# addresses - keep them local. Only the template is versioned.
+billing-alerts/Billing-Alert.*.psd1
+!billing-alerts/Billing-Alert.example.psd1
