@@ -2,3 +2,11 @@
 # addresses - keep them local. Only the template is versioned.
 billing-alerts/Billing-Alert.*.psd1
 !billing-alerts/Billing-Alert.example.psd1
+
+# Platform environment configs contain tenant / subscription IDs - keep
+# them local. Only the template is versioned.
+platform/Platform.*.psd1
+!platform/Platform.example.psd1
+
+# Generated governance inputs (resource IDs of the deployed platform)
+platform/out/
