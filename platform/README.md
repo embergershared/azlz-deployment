@@ -20,7 +20,8 @@ Platform.<env>.psd1 ──► Deploy-Platform.ps1 ──► ALZ_* environment va
          upstream\alz-bicep-accelerator\templates\...   (vendored, pinned tag)
                 │
                 ▼
-         az deployment sub what-if | validate | create
+         az stack sub create | validate      (one deployment stack per component)
+         az stack-whatif sub create          (preview, Delete included)
 ```
 
 | Component | Subscription | Upstream template | Our parameters |
@@ -56,7 +57,8 @@ they are the large cost items, enable them in the config when needed.
 ## Prerequisites
 
 - PowerShell 7 (`pwsh`)
-- Azure CLI 2.53+ (`az bicep` is used to compile the `.bicepparam` files)
+- Azure CLI 2.61+ (`az stack` for deployment stacks, `az bicep` to compile the
+  `.bicepparam` files); the `WhatIf` mode needs `az stack-whatif` (Azure CLI 2.91 has it)
 - Owner (or Contributor + User Access Administrator) on both platform subscriptions
 - Subscriptions already placed in their management groups by the governance repository
   (recommended, so the platform policies apply from the first deployment)
@@ -77,6 +79,8 @@ they are the large cost items, enable them in the config when needed.
    | `NameToken` | `<token>` in resource names (`alz` = ALZ default names) |
    | `NetworkType` | `hubNetworking`, `vwanConnectivity` or `none` |
    | `ResourceLockKind` | `None`, `CanNotDelete` or `ReadOnly` on every resource |
+   | `StackActionOnUnmanage` | What the stack does with a resource that left the templates: `deleteAll` (default), `deleteResources` or `detachAll`, see [Deployment stacks](#deployment-stacks) |
+   | `StackDenySettingsMode` | Deny assignment on the stack's resources: `none` (default), `denyDelete` or `denyWriteAndDelete` |
    | `Tags` | Tags on every resource |
    | `Management` | Log retention, daily cap, solutions, Automation account |
    | `Connectivity` | Address prefixes (one per location) and feature switches |
@@ -99,10 +103,40 @@ they are the large cost items, enable them in the config when needed.
 
 | `-Mode` | Does |
 |---|---|
-| `WhatIf` (default) | `az deployment sub what-if` |
-| `Validate` | `az deployment sub validate` |
-| `Deploy` | `az deployment sub create`, then writes the governance inputs |
+| `WhatIf` (default) | `az stack-whatif sub create`: Create / Modify / NoChange, and **Delete** for what left the templates |
+| `Validate` | `az stack sub validate` |
+| `Deploy` | `az stack sub create` (creates or updates the stack), then writes the governance inputs |
 | `Outputs` | Only (re)writes the governance inputs from what is deployed |
+
+## Deployment stacks
+
+Each component is a subscription-scope
+[deployment stack](https://learn.microsoft.com/azure/azure-resource-manager/bicep/deployment-stacks):
+`alz-management` in the Management subscription, `alz-connectivity` in the
+Connectivity subscription. A stack remembers the resources its template created
+(its *managed resources*). When a resource leaves the templates, for example the
+DNS Private Resolver and its resource group after `DeployDnsPrivateResolver = $false`,
+the next `-Mode Deploy` deletes it, as set by `StackActionOnUnmanage`. A plain
+`az deployment sub create` (incremental mode) would leave it behind, and Complete
+mode does not exist at subscription scope.
+
+- `-Mode WhatIf` lists these deletions as **Delete** (or **Detach**) before anything runs.
+- To list what a stack manages:
+
+  ```powershell
+  az stack sub show --name alz-connectivity --subscription <connectivity-subscription-id> --query "resources[].id" --output tsv
+  ```
+
+- **Taking over an environment deployed before this change** (with
+  `az deployment sub create`): run `-Mode Deploy` once with the unchanged config.
+  The stack adopts the existing resources (the what-if should show no changes).
+  Only resources that leave the templates *after* that run are deleted by later runs.
+- **Deleting a stack itself** (`az stack sub delete`) with `--action-on-unmanage deleteAll`
+  deletes every resource it manages, that is the whole platform of that subscription.
+  Use `detachAll` to drop the stack and keep the resources.
+- **"Stack out of sync" error**: Azure refuses an update when its list of managed
+  resources may be inaccurate. Re-run `-Mode Deploy` with the previous config first;
+  pass `--bypass-stack-out-of-sync-error` by hand only after checking the list above.
 
 ## Governance inputs
 

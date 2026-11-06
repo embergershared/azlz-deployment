@@ -17,10 +17,18 @@
 # Each environment lives in its own config file - see Platform.example.psd1.
 # Values reach the .bicepparam files as ALZ_* environment variables.
 #
+# Each component is a subscription-scope deployment stack (alz-management,
+# alz-connectivity). A stack remembers the resources it deployed: a resource
+# that stops being deployed (e.g. the DNS Private Resolver once
+# DeployDnsPrivateResolver = $false) is deleted on the next Deploy, as set
+# by StackActionOnUnmanage in the config. An incremental deployment
+# (az deployment sub create) would leave it behind, and Complete mode does
+# not exist at subscription scope.
+#
 # Modes:
-#   WhatIf   (default) az deployment sub what-if
-#   Validate           az deployment sub validate
-#   Deploy             az deployment sub create
+#   WhatIf   (default) az stack-whatif sub create : Create / Modify / Delete preview
+#   Validate           az stack sub validate
+#   Deploy             az stack sub create        : deploys, then deletes what left the templates
 #   Outputs            only (re)write the governance inputs file
 #
 # Usage:
@@ -50,6 +58,15 @@ $NetworkTemplates = @{
     vwanConnectivity = "connectivity-virtualwan.bicepparam"
 }
 
+# Deployment stack per component: <prefix>-<component>. The name must stay
+# the same from one run to the next: the stack tracks the resources it manages.
+$StackNamePrefix = "alz"
+# Azure keeps a what-if result for this long (ISO 8601 duration)
+$WhatIfRetention = "PT1H"
+# Allowed values of the stack settings in Platform.<env>.psd1
+$StackActions    = "deleteAll", "deleteResources", "detachAll"
+$DenyModes       = "none", "denyDelete", "denyWriteAndDelete"
+
 # --------------------------------------------------------------
 # LOAD AND CHECK CONFIG
 # --------------------------------------------------------------
@@ -61,6 +78,8 @@ $NameToken    = if ($Config.NameToken) { $Config.NameToken } else { "alz" }
 $NetworkType  = if ($Config.NetworkType) { $Config.NetworkType } else { "hubNetworking" }
 $Management   = if ($Config.Management) { $Config.Management } else { @{} }
 $Connectivity = if ($Config.Connectivity) { $Config.Connectivity } else { @{} }
+$OnUnmanage   = if ($Config.StackActionOnUnmanage) { $Config.StackActionOnUnmanage } else { "deleteAll" }
+$DenyMode     = if ($Config.StackDenySettingsMode) { $Config.StackDenySettingsMode } else { "none" }
 
 if (-not $Locations)                         { throw "Locations is empty in $ConfigFile" }
 if (-not $Config.ManagementSubscriptionId)   { throw "ManagementSubscriptionId is missing in $ConfigFile" }
@@ -68,6 +87,8 @@ if (-not $Config.ConnectivitySubscriptionId) { throw "ConnectivitySubscriptionId
 if ($NetworkType -notin @($NetworkTemplates.Keys) + "none") {
     throw "NetworkType '$NetworkType' is not one of: $($NetworkTemplates.Keys -join ', '), none"
 }
+if ($OnUnmanage -notin $StackActions) { throw "StackActionOnUnmanage '$OnUnmanage' is not one of: $($StackActions -join ', ')" }
+if ($DenyMode -notin $DenyModes)      { throw "StackDenySettingsMode '$DenyMode' is not one of: $($DenyModes -join ', ')" }
 
 foreach ($Key in "HubAddressPrefixes", "SidecarAddressPrefixes") {
     if ($Connectivity.ContainsKey($Key) -and @($Connectivity[$Key]).Count -ne $Locations.Count) {
@@ -91,6 +112,7 @@ Write-Host "Environment   : $Environment"
 Write-Host "Mode          : $Mode"
 Write-Host "Locations     : $($Locations -join ', ')"
 Write-Host "Network type  : $NetworkType"
+Write-Host "On unmanage   : $OnUnmanage (deny settings: $DenyMode)"
 
 # --------------------------------------------------------------
 # AZ CLI CONTEXT
@@ -142,24 +164,31 @@ if ($Mode -ne "Outputs") {
     $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 
     foreach ($Deployment in $Deployments) {
-        $ParamPath      = Join-Path $PSScriptRoot "params/$($Deployment.ParamFile)"
-        $DeploymentName = "alz-$($Deployment.Name.ToLower())-$Timestamp"
-        $Verb           = @{ WhatIf = "what-if"; Validate = "validate"; Deploy = "create" }[$Mode]
+        $ParamPath = Join-Path $PSScriptRoot "params/$($Deployment.ParamFile)"
+        $StackName = "$StackNamePrefix-$($Deployment.Name.ToLower())"
+        $StackId   = "/subscriptions/$($Deployment.SubscriptionId)/providers/Microsoft.Resources/deploymentStacks/$StackName"
+
+        $Arguments = switch ($Mode) {
+            # Preview against the stack: Create / Modify / NoChange, and Delete (or
+            # Detach, per StackActionOnUnmanage) for the resources that left the
+            # templates. The result is a short-lived Azure object: own name, retention.
+            "WhatIf"   { "stack-whatif", "sub", "create", "--name", "$StackName-$Timestamp", "--stack-id", $StackId, "--retention-interval", $WhatIfRetention }
+            "Validate" { "stack", "sub", "validate", "--name", $StackName, "--output", "table" }
+            # --yes: an existing stack is updated without the "overwrite?" prompt
+            "Deploy"   { "stack", "sub", "create", "--name", $StackName, "--yes", "--output", "table" }
+        }
+        $Arguments += @(
+            "--location", $Locations[0]
+            "--subscription", $Deployment.SubscriptionId
+            "--parameters", $ParamPath
+            "--action-on-unmanage", $OnUnmanage
+            "--deny-settings-mode", $DenyMode
+        )
 
         Write-Host ""
-        Write-Host "==> $($Deployment.Name) : az deployment sub $Verb ($($Deployment.ParamFile))" -ForegroundColor Cyan
+        Write-Host "==> $($Deployment.Name) : az $($Arguments[0..2] -join ' ') ($($Deployment.ParamFile))" -ForegroundColor Cyan
         Write-Host "    Subscription : $($Deployment.SubscriptionId)"
-        Write-Host "    Deployment   : $DeploymentName ($($Locations[0]))"
-
-        $Arguments = @(
-            "deployment", "sub", $Verb
-            "--subscription", $Deployment.SubscriptionId
-            "--name", $DeploymentName
-            "--location", $Locations[0]
-            "--parameters", $ParamPath
-        )
-        # what-if prints its own change report
-        if ($Mode -ne "WhatIf") { $Arguments += "--output", "table" }
+        Write-Host "    Stack        : $StackName ($($Locations[0]))"
 
         az @Arguments
         if ($LASTEXITCODE -ne 0) { throw "$($Deployment.Name) $Mode failed" }
