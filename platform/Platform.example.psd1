@@ -84,6 +84,11 @@
 
         DeployBastion             = $false
         BastionSku                = "Standard"
+        # Instances (host scaling): 2-50 on Standard or higher, Basic is fixed at 2.
+        # Each instance adds 20 RDP / 40 SSH sessions, and cost. Changing it later
+        # disconnects the active Bastion sessions. Absent = upstream default
+        # (4 with hub networking, 2 with vWAN).
+        BastionScaleUnits         = 2
 
         DeployVpnGateway          = $false
         VpnGatewaySku             = "VpnGw1AZ"          # hub networking only
