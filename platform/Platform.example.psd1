@@ -29,6 +29,18 @@
     # AVM usage telemetry (no customer data, see aka.ms/avm/telemetry)
     EnableTelemetry            = $true
 
+    # Each component is a deployment stack. What happens, on the next Deploy,
+    # to a resource that left the templates (e.g. the DNS Private Resolver
+    # after DeployDnsPrivateResolver = $false):
+    #   deleteAll        delete it, and its resource group when the templates created it
+    #   deleteResources  delete it, keep the resource group
+    #   detachAll        keep it, the stack just stops managing it
+    StackActionOnUnmanage      = "deleteAll"
+
+    # Deny assignment on the stack's resources: none | denyDelete | denyWriteAndDelete.
+    # Anything but none needs the "Azure Deployment Stack Owner" role.
+    StackDenySettingsMode      = "none"
+
     Tags                       = @{
         Environment = "prod"
         Workload    = "platform-landing-zone"
