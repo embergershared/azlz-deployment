@@ -120,6 +120,8 @@ param vwanHubs = map(range(0, length(locations)), i => {
     deployBastion: cfg.?DeployBastion ?? false
     name: 'bas-${token}-${locations[i]}'
     sku: cfg.?BastionSku ?? 'Standard'
+    // Instance count (host scaling, Standard SKU); 2 is the upstream default
+    scaleUnits: cfg.?BastionScaleUnits ?? 2
   }
 
   sideCarVirtualNetwork: {

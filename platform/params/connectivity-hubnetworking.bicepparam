@@ -104,6 +104,8 @@ param hubNetworks = map(range(0, length(locations)), i => {
     deployBastion: cfg.?DeployBastion ?? false
     bastionHostSettingsName: 'bas-${token}-${locations[i]}'
     skuName: cfg.?BastionSku ?? 'Standard'
+    // Instance count (host scaling, Standard or higher); 4 is the upstream default
+    scaleUnits: cfg.?BastionScaleUnits ?? 4
   }
 
   vpnGatewaySettings: {
